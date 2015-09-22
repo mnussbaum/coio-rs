@@ -22,7 +22,7 @@
 
 //! Coroutine scheduling with asynchronous I/O support
 
-#![feature(catch_panic, reflect_marker, fnbox)]
+#![feature(catch_panic, drain, reflect_marker, fnbox)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -73,10 +73,22 @@ pub fn sched() {
     Scheduler::sched()
 }
 
-/// Run the scheduler with threads
+/// Run the scheduler with threads, block until all its threads finish
 #[inline(always)]
 pub fn run(threads: usize) {
     Scheduler::run(threads)
+}
+
+/// Run the scheduler with threads, don't block
+#[inline(always)]
+pub fn start(threads: usize) {
+    Scheduler::start(threads)
+}
+
+/// Block until every scheduler thread finishes
+#[inline(always)]
+pub fn join() {
+    Scheduler::join()
 }
 
 /// Put the current coroutine to sleep for the specific amount of time
@@ -134,5 +146,13 @@ mod test {
         });
 
         run(1);
+    }
+
+    #[test]
+    fn test_start_join() {
+        spawn(|| {});
+
+        start(1);
+        join();
     }
 }

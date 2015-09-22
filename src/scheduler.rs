@@ -22,6 +22,7 @@
 //! Global coroutine scheduler
 
 use std::thread;
+use std::thread::JoinHandle as ThreadJoinHandle;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::sync::mpsc::Sender;
@@ -58,6 +59,7 @@ unsafe impl<T: Send> Send for JoinHandle<T> {}
 pub struct Scheduler {
     work_counts: AtomicUsize,
     proc_handles: Mutex<Vec<(Sender<ProcMessage>, Stealer<SendableCoroutinePtr>)>>,
+    work_thread_futures: Mutex<Vec<ThreadJoinHandle<()>>>,
 }
 
 unsafe impl Send for Scheduler {}
@@ -68,6 +70,7 @@ impl Scheduler {
         Scheduler {
             work_counts: AtomicUsize::new(0),
             proc_handles: Mutex::new(Vec::new()),
+            work_thread_futures: Mutex::new(Vec::new()),
         }
     }
 
@@ -132,8 +135,12 @@ impl Scheduler {
 
     /// Run the scheduler with `n` threads
     pub fn run(n: usize) {
+        Scheduler::start(n);
+        Scheduler::join();
+    }
+
+    pub fn start(n : usize) {
         assert!(n >= 1, "There must be at least 1 thread");
-        Scheduler::instance().proc_handles.lock().unwrap().clear();
 
         fn do_work() {
             {
@@ -158,17 +165,29 @@ impl Scheduler {
             }
         }
 
-        let mut futs = Vec::new();
-        for _ in 1..n {
-            let fut = thread::spawn(do_work);
-
-            futs.push(fut);
+        match Scheduler::instance().work_thread_futures.lock() {
+            Ok(mut work_thread_futures) => {
+                for _ in 1..n {
+                    work_thread_futures.push(thread::spawn(do_work));
+                }
+            },
+            Err(err) => panic!("Scheduler work threads mutex error: {:?}", err),
         }
 
         do_work();
+    }
 
-        for fut in futs.into_iter() {
-            fut.join().unwrap();
+    pub fn join() {
+        match Scheduler::instance().work_thread_futures.lock() {
+            Ok(mut work_thread_futures) => {
+                for future in work_thread_futures.drain(..) {
+                    match future.join() {
+                        Ok(_) => {},
+                        Err(err) => panic!("Error joining scheduler work thread: {:?}", err),
+                    }
+                }
+            },
+            Err(err) => panic!("Scheduler work threads mutex error: {:?}", err),
         }
     }
 
@@ -188,10 +207,29 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_join_basic() {
+    fn test_coroutine_join_basic() {
         let guard = Scheduler::spawn(|| 1);
         Scheduler::run(1);
 
         assert_eq!(1, guard.join().unwrap());
+    }
+
+    #[test]
+    fn test_scheduler_start_join() {
+        let guard = Scheduler::spawn(|| 1);
+        Scheduler::start(1);
+        Scheduler::join();
+
+        assert_eq!(1, guard.join().unwrap());
+    }
+
+    #[test]
+    fn test_can_spawn_after_start() {
+        Scheduler::start(1);
+        let guard = Scheduler::spawn(|| 1);
+
+        assert_eq!(1, guard.join().unwrap());
+
+        Scheduler::join();
     }
 }
